@@ -1,0 +1,17 @@
+[package]
+name = "wgpu-stippling"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+wgpu = { git = "https://github.com/gfx-rs/wgpu", branch = "master" }
+bytemuck = { version = "1.4", features = [ "derive" ] }
+ndarray = "0.15"
+pollster = "0.2"
+image = "0.23"
+winit = "0.26"
+rand = "0.7"
+env_logger = "0.9"
+cgmath = "0.18"
