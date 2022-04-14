@@ -14,6 +14,8 @@ use winit::{
 
 const PARTICLES_PER_GROUP: u32 = 64;
 
+const DOT_SIZE: f32 = 0.008;
+
 const NUM_PARTICLES: u32 = 8192;
 const Q_CHARGE: f32 = 0.2;
 const BLANK_LEVEL: f32 = 0.95;
@@ -71,7 +73,7 @@ impl Model {
         let compute_shader = device.create_shader_module(&wgpu::include_wgsl!("compute.wgsl"));
         let draw_shader = device.create_shader_module(&wgpu::include_wgsl!("draw.wgsl"));
 
-        let img_bytes = include_bytes!("../assets/black_cat.png");
+        let img_bytes = include_bytes!("../assets/cat_3_square.png");
         let img = image::load_from_memory(img_bytes).unwrap();
         let texture = create_and_write_texture(&device, &queue, &img);
         let texture_bind_group_layout = create_texture_bind_group_layout(&device);
@@ -169,7 +171,7 @@ impl Model {
             render_pass
                 .set_vertex_buffer(0, self.particle_buffers[(self.frame_num + 1) % 2].slice(..));
             render_pass.set_vertex_buffer(1, self.vertices_buffer.slice(..));
-            render_pass.draw(0..3, 0..NUM_PARTICLES);
+            render_pass.draw(0..24, 0..NUM_PARTICLES);
         }
         self.frame_num += 1;
 
@@ -439,7 +441,17 @@ fn create_render_pipeline(
 }
 
 fn create_vertices_buffer(device: &wgpu::Device) -> wgpu::Buffer {
-    let vertex_buffer_data = [0.005f32, 0.00, -0.0025, 0.004, -0.0025, -0.004];
+    // 8 * 6
+    let mut vertex_buffer_data: [f32; 48] = [0.0; 48];
+    let theta = 2.0 * std::f32::consts::PI / 8.0;
+    for i in 0..8 {
+        vertex_buffer_data[6*i] = 0.0;
+        vertex_buffer_data[6*i+1] = 0.0;
+        vertex_buffer_data[6*i+2] = DOT_SIZE * (i as f32 * theta).cos();
+        vertex_buffer_data[6*i+3] = DOT_SIZE * (i as f32 * theta).sin();
+        vertex_buffer_data[6*i+4] = DOT_SIZE * ((i as f32 + 1.0) * theta).cos();
+        vertex_buffer_data[6*i+5] = DOT_SIZE * ((i as f32 + 1.0) * theta).sin();
+    }
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Vertex Buffer"),
         contents: bytemuck::bytes_of(&vertex_buffer_data),
