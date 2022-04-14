@@ -445,12 +445,12 @@ fn create_vertices_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     let mut vertex_buffer_data: [f32; 48] = [0.0; 48];
     let theta = 2.0 * std::f32::consts::PI / 8.0;
     for i in 0..8 {
-        vertex_buffer_data[6*i] = 0.0;
-        vertex_buffer_data[6*i+1] = 0.0;
-        vertex_buffer_data[6*i+2] = DOT_SIZE * (i as f32 * theta).cos();
-        vertex_buffer_data[6*i+3] = DOT_SIZE * (i as f32 * theta).sin();
-        vertex_buffer_data[6*i+4] = DOT_SIZE * ((i as f32 + 1.0) * theta).cos();
-        vertex_buffer_data[6*i+5] = DOT_SIZE * ((i as f32 + 1.0) * theta).sin();
+        vertex_buffer_data[6 * i] = 0.0;
+        vertex_buffer_data[6 * i + 1] = 0.0;
+        vertex_buffer_data[6 * i + 2] = DOT_SIZE * (i as f32 * theta).cos();
+        vertex_buffer_data[6 * i + 3] = DOT_SIZE * (i as f32 * theta).sin();
+        vertex_buffer_data[6 * i + 4] = DOT_SIZE * ((i as f32 + 1.0) * theta).cos();
+        vertex_buffer_data[6 * i + 5] = DOT_SIZE * ((i as f32 + 1.0) * theta).sin();
     }
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Vertex Buffer"),
