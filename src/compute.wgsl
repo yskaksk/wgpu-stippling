@@ -47,81 +47,44 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
   var vAcc : vec2<f32> = particlesSrc[index].acc;
 
   let Epsilon = 0.0000001;
-  var acc : vec2<f32> = vec2<f32>(0.0, 0.0);
 
   let texture_size = textureDimensions(t);
   let texture_w = texture_size[0];
   let texture_h = texture_size[1];
 
-  var ix : i32 = 0;
+  let ix = floor((vPos.x + 1.0) * f32(texture_w) / 2.0);
+  let iy = floor((1.0 - vPos.y) * f32(texture_h) / 2.0);
+
+  let texel = textureLoad(t, vec2<i32>(i32(ix), i32(iy)), 0);
+  var acc : vec2<f32> = vec2<f32>(texel[0], texel[1]);
+
+  var i: u32 = 0u;
   loop {
-    if (ix >= texture_w) {
-      break;
-    }
-    var iy : i32 = 0;
-    loop {
-      if (iy >= texture_h) {
-        break;
+      if (i >= total) {
+          break;
       }
+      if (i == index) {
+          continue;
+      }
+      let dotPos = particlesSrc[i].pos;
+      var dp : vec2<f32> = dotPos - vPos;
+      dp.x = rotate(dp.x);
+      dp.y = rotate(dp.y);
 
-      let texel = textureLoad(t, vec2<i32>(ix, iy), 0);
-      let bmpQ = (params.blank_level - (texel[0] * 0.299 + texel[1] * 0.587 + texel[2] * 0.114)) * params.scale;
-
-      let texpos = vec2<f32>(
-        2.0 * f32(ix) / f32(texture_w) - 1.0,
-        1.0 - 2.0 * f32(iy) / f32(texture_h)
-      );
-
-      var dp : vec2<f32> = texpos - vPos;
-      dp[0] = rotate(dp[0]);
-      dp[1] = rotate(dp[1]);
       let d2 = dot(dp, dp) + 0.00003;
       let d = sqrt(d2);
-
       if (abs(d) > Epsilon) {
-          let q = bmpQ / d2;
-          acc += q * dp / d;
+          let q = params.q_charge / d2;
+          acc -= q * dp / d;
       }
-
       continuing {
-        iy = iy + 1;
+          i = i + 1u;
       }
-    }
-    continuing {
-      ix = ix + 1;
-    }
-  }
-
-  var i : u32 = 0u;
-  loop {
-    if (i >= total) {
-      break;
-    }
-    if (i == index) {
-      continue;
-    }
-
-    let dotPos = particlesSrc[i].pos;
-    var dp : vec2<f32> = dotPos - vPos;
-    dp.x = rotate(dp.x);
-    dp.y = rotate(dp.y);
-
-    let d2 = dot(dp, dp) + 0.00003;
-    let d = sqrt(d2);
-    if (abs(d) > Epsilon) {
-      let q = params.q_charge / d2;
-      acc -= q * dp / d;
-    }
-
-    continuing {
-      i = i + 1u;
-    }
   }
 
   acc *= params.q_charge;
 
   var vel : vec2<f32> = (params.sustain * vVel) + params.dt_2 * (vAcc + acc);
-  var vel : vec2<f32> = vVel;
   let vlen = length(vel);
   if (vlen > params.v_max) {
       vel *= params.v_max / vlen;
@@ -137,6 +100,5 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
   pos.x = rotate(pos.x);
   pos.y = rotate(pos.y);
 
-  // Write back
   particlesDst[index] = Particle(pos, vel, acc);
 }
