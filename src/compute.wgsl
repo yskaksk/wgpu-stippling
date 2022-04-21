@@ -14,14 +14,17 @@ struct SimParams {
     dt_2: f32,
     dtt: f32,
     v_max: f32,
-    scale: f32
+    fc: f32,
+    pi: f32
 };
 
 @group(0) @binding(0) var<uniform> params : SimParams;
-@group(0) @binding(1) var<storage, read> particlesSrc : array<Particle>;
-@group(0) @binding(2) var<storage, read_write> particlesDst : array<Particle>;
 
-@group(1) @binding(0) var t: texture_2d<f32>;
+@group(1) @binding(0) var<storage, read> particlesSrc : array<Particle>;
+@group(1) @binding(1) var<storage, read_write> particlesDst : array<Particle>;
+
+@group(2) @binding(0) var t: texture_2d<f32>;
+@group(2) @binding(1) var t2: texture_2d<f32>;
 
 fn rotate(v: f32) -> f32 {
     if (v > 1.0) {
@@ -31,6 +34,15 @@ fn rotate(v: f32) -> f32 {
     } else {
         return v;
     }
+}
+
+fn get_texel(texture: texture_2d<f32>, x: f32, y: f32) -> vec4<f32> {
+    let texture_size = textureDimensions(texture);
+    let width = texture_size[0];
+    let height = texture_size[1];
+    let ix = i32(floor((x + 1.0) * f32(width) / 2.0));
+    let iy = i32(floor((1.0 - y) * f32(height) / 2.0));
+    return textureLoad(texture, vec2<i32>(ix, iy), 0);
 }
 
 @stage(compute)
@@ -48,15 +60,17 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
 
   let Epsilon = 0.0000001;
 
-  let texture_size = textureDimensions(t);
-  let texture_w = texture_size[0];
-  let texture_h = texture_size[1];
+  let texel1 = get_texel(t, vPos.x, vPos.y);
+  let texel2 = get_texel(t2, vPos.x, vPos.y);
 
-  let ix = floor((vPos.x + 1.0) * f32(texture_w) / 2.0);
-  let iy = floor((1.0 - vPos.y) * f32(texture_h) / 2.0);
+  var acc : vec2<f32> = vec2<f32>(0.0, 0.0);
+  let theta = params.fc * params.pi / 360.0;
+  if (vPos.x > cos(theta)) {
+    acc = vec2<f32>(texel1[0], texel1[1]);
+  } else {
+    acc = vec2<f32>(texel2[0], texel2[1]);
+  }
 
-  let texel = textureLoad(t, vec2<i32>(i32(ix), i32(iy)), 0);
-  var acc : vec2<f32> = vec2<f32>(texel[0], texel[1]);
 
   var i: u32 = 0u;
   loop {

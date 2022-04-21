@@ -18,7 +18,7 @@ fn rotate(v: f32) -> f32 {
 }
 
 @stage(compute)
-@workgroup_size(8, 8)
+@workgroup_size(16, 16)
 fn main(
     @builtin(global_invocation_id) global_invocation_id: vec3<u32>
 ) {
