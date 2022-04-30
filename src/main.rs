@@ -1,4 +1,5 @@
 use image::{self, DynamicImage, GenericImageView};
+use pollster::FutureExt;
 use rand::{
     distributions::{Distribution, Uniform},
     SeedableRng,
@@ -16,12 +17,9 @@ const PARTICLES_PER_GROUP: u32 = 64;
 
 const DOT_SIZE: f32 = 0.005;
 
-//const NUM_PARTICLES: u32 = 4096;
-//const NUM_PARTICLES: u32 = 8192;
 const NUM_PARTICLES: u32 = 16384;
-//const NUM_PARTICLES: u32 = 32768;
-const Q_CHARGE: f32 = 0.1;
-const BLANK_LEVEL: f32 = 1.0;
+const Q_CHARGE: f32 = 0.05;
+const BLANK_LEVEL: f32 = 0.95;
 const TIME_DELTA: f32 = 0.001;
 const D_MAX: f32 = 0.005;
 const SUSTAIN: f32 = 0.95;
@@ -38,6 +36,8 @@ struct Model {
     render_pipeline: wgpu::RenderPipeline,
     parameter_bind_group_layout: wgpu::BindGroupLayout,
     work_group_count: u32,
+    texture_size: wgpu::Extent3d,
+    frames: Vec<Vec<u8>>,
     frame_num: usize,
 }
 
@@ -81,12 +81,7 @@ impl Model {
         let cache_shader = device.create_shader_module(&wgpu::include_wgsl!("cache.wgsl"));
         let compute_shader = device.create_shader_module(&wgpu::include_wgsl!("compute.wgsl"));
 
-        //let img_bytes = include_bytes!("../assets/black_cat.png");
         let img_bytes = include_bytes!("../assets/cat_3_square.png");
-        //let img_bytes = include_bytes!("../assets/cat_face.png");
-        //let img_bytes = include_bytes!("../assets/namiura_high_square_400px.png");
-        //let img_bytes = include_bytes!("../assets/van_gogh_400px.png");
-        //let img_bytes = include_bytes!("../assets/Dali_square.png");
         let img = image::load_from_memory(img_bytes).unwrap();
 
         let (w, h) = img.dimensions();
@@ -186,6 +181,7 @@ impl Model {
         let particle_buffers = create_particle_buffers(&device);
         let particle_bind_groups =
             create_particle_bind_groups(&device, &compute_bind_group_layout, &particle_buffers);
+        let frames = Vec::new();
 
         Model {
             surface,
@@ -199,6 +195,8 @@ impl Model {
             render_pipeline,
             parameter_bind_group_layout,
             work_group_count,
+            texture_size,
+            frames,
             frame_num: 0,
         }
     }
@@ -209,12 +207,95 @@ impl Model {
 
     fn update(&mut self) {}
 
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let frame = self.surface.get_current_texture()?;
-        let view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+    fn render_frame(&mut self) -> anyhow::Result<()> {
+        let mut command_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let target_texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            size: self.texture_size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
+            label: None,
+        });
+        let color_attachments = [wgpu::RenderPassColorAttachment {
+            view: &target_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                }),
+                store: true,
+            },
+        }];
+        let render_pass_descriptor = wgpu::RenderPassDescriptor {
+            label: None,
+            color_attachments: &color_attachments,
+            depth_stencil_attachment: None,
+        };
+        {
+            let mut render_pass = command_encoder.begin_render_pass(&render_pass_descriptor);
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass
+                .set_vertex_buffer(0, self.particle_buffers[(self.frame_num + 1) % 2].slice(..));
+            render_pass.set_vertex_buffer(1, self.vertices_buffer.slice(..));
+            render_pass.draw(0..24, 0..NUM_PARTICLES);
+        }
 
+        let padded_bytes_per_row = padded_bytes_per_row(self.texture_size.width);
+        let unpadded_bytes_per_row = self.texture_size.width as usize * 4;
+        let output_buffer_size = padded_bytes_per_row as u64
+            * self.texture_size.height as u64
+            * std::mem::size_of::<u8>() as u64;
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: output_buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        command_encoder.copy_texture_to_buffer(
+            wgpu::ImageCopyTexture {
+                aspect: wgpu::TextureAspect::All,
+                texture: &target_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+            },
+            wgpu::ImageCopyBuffer {
+                buffer: &output_buffer,
+                layout: wgpu::ImageDataLayout {
+                    offset: 0,
+                    bytes_per_row: std::num::NonZeroU32::new(padded_bytes_per_row as u32),
+                    rows_per_image: std::num::NonZeroU32::new(self.texture_size.height),
+                },
+            },
+            self.texture_size,
+        );
+        self.queue.submit(Some(command_encoder.finish()));
+
+        let buffer_slice = output_buffer.slice(..);
+        let mapping = buffer_slice.map_async(wgpu::MapMode::Read);
+        self.device.poll(wgpu::Maintain::Wait);
+        mapping.block_on().unwrap();
+        let padded_data = buffer_slice.get_mapped_range();
+
+        let data = padded_data
+            .chunks(padded_bytes_per_row as _)
+            .map(|chunk| &chunk[..unpadded_bytes_per_row as _])
+            .flatten()
+            .map(|x| *x)
+            .collect::<Vec<_>>();
+        drop(padded_data);
+        output_buffer.unmap();
+        self.frames.push(data);
+        Ok(())
+    }
+
+    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let parameter_data = create_param_data(self.frame_num as f32);
         let parameter_buffer = create_parameter_buffer(&self.device, &parameter_data);
         let parameter_bind_group = create_parameter_bind_group(
@@ -222,7 +303,23 @@ impl Model {
             &self.parameter_bind_group_layout,
             &parameter_buffer,
         );
+        let mut command_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let mut compute_pass =
+                command_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
+            compute_pass.set_pipeline(&self.compute_pipeline);
+            compute_pass.set_bind_group(0, &parameter_bind_group, &[]);
+            compute_pass.set_bind_group(1, &self.particle_bind_groups[self.frame_num % 2], &[]);
+            compute_pass.set_bind_group(2, &self.texture_bind_group, &[]);
+            compute_pass.dispatch(self.work_group_count, 1, 1);
+        }
 
+        let frame = self.surface.get_current_texture()?;
+        let view = frame
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let color_attachments = [wgpu::RenderPassColorAttachment {
             view: &view,
             resolve_target: None,
@@ -241,19 +338,6 @@ impl Model {
             color_attachments: &color_attachments,
             depth_stencil_attachment: None,
         };
-        let mut command_encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        {
-            let mut compute_pass =
-                command_encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
-            compute_pass.set_pipeline(&self.compute_pipeline);
-            compute_pass.set_bind_group(0, &parameter_bind_group, &[]);
-            compute_pass.set_bind_group(1, &self.particle_bind_groups[self.frame_num % 2], &[]);
-            compute_pass.set_bind_group(2, &self.texture_bind_group, &[]);
-            compute_pass.dispatch(self.work_group_count, 1, 1);
-        }
-
         {
             let mut render_pass = command_encoder.begin_render_pass(&render_pass_descriptor);
             render_pass.set_pipeline(&self.render_pipeline);
@@ -262,11 +346,26 @@ impl Model {
             render_pass.set_vertex_buffer(1, self.vertices_buffer.slice(..));
             render_pass.draw(0..24, 0..NUM_PARTICLES);
         }
+        self.queue.submit(Some(command_encoder.finish()));
+        frame.present();
+
+        if self.frame_num % 6 == 0 {
+            self.render_frame().unwrap();
+        }
         self.frame_num += 1;
 
-        self.queue.submit(Some(command_encoder.finish()));
+        if self.frame_num == 270 {
+            println!("saving...");
+            save_gif(
+                "output.gif",
+                &mut self.frames,
+                1,
+                self.texture_size.width as u16,
+            )
+            .unwrap();
+            println!("saved!!!");
+        }
 
-        frame.present();
         Ok(())
     }
 }
@@ -307,7 +406,6 @@ fn main() {
             match model.render() {
                 Ok(_) => {}
                 Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-                //Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
                 Err(e) => eprintln!("{:?}", e),
             }
         }
@@ -339,76 +437,6 @@ fn create_param_data(frame_count: f32) -> Vec<f32> {
     ];
 }
 
-//fn create_and_write_texture(
-//    device: &wgpu::Device,
-//    queue: &wgpu::Queue,
-//    img: &DynamicImage,
-//) -> wgpu::Texture {
-//    let (width, height) = img.dimensions();
-//    let size = wgpu::Extent3d {
-//        width,
-//        height,
-//        depth_or_array_layers: 1,
-//    };
-//    let texture = device.create_texture(&wgpu::TextureDescriptor {
-//        size,
-//        mip_level_count: 1,
-//        sample_count: 1,
-//        dimension: wgpu::TextureDimension::D2,
-//        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-//        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-//        label: Some("texture"),
-//    });
-//    queue.write_texture(
-//        wgpu::ImageCopyTexture {
-//            texture: &texture,
-//            mip_level: 0,
-//            origin: wgpu::Origin3d::ZERO,
-//            aspect: wgpu::TextureAspect::All,
-//        },
-//        &img.to_rgba8(),
-//        wgpu::ImageDataLayout {
-//            offset: 0,
-//            bytes_per_row: std::num::NonZeroU32::new(4 * width),
-//            rows_per_image: std::num::NonZeroU32::new(height),
-//        },
-//        size,
-//    );
-//    return texture;
-//}
-//
-//fn create_texture_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-//    return device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-//        entries: &[wgpu::BindGroupLayoutEntry {
-//            binding: 0,
-//            visibility: wgpu::ShaderStages::COMPUTE,
-//            ty: wgpu::BindingType::Texture {
-//                multisampled: false,
-//                view_dimension: wgpu::TextureViewDimension::D2,
-//                sample_type: wgpu::TextureSampleType::Float { filterable: true },
-//            },
-//            count: None,
-//        }],
-//        label: Some("texture_bind_group_layout"),
-//    });
-//}
-//
-//fn create_texture_bind_group(
-//    device: &wgpu::Device,
-//    texture_bind_group_layout: &wgpu::BindGroupLayout,
-//    texture: &wgpu::Texture,
-//) -> wgpu::BindGroup {
-//    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-//    return device.create_bind_group(&wgpu::BindGroupDescriptor {
-//        layout: texture_bind_group_layout,
-//        entries: &[wgpu::BindGroupEntry {
-//            binding: 0,
-//            resource: wgpu::BindingResource::TextureView(&view),
-//        }],
-//        label: Some("diffuse_bind_group"),
-//    });
-//}
-
 fn create_parameter_bind_group_layout(
     device: &wgpu::Device,
     parameter_size: usize,
@@ -429,49 +457,6 @@ fn create_parameter_bind_group_layout(
         label: None,
     })
 }
-
-//fn create_compute_bind_group_layout(
-//    device: &wgpu::Device,
-//    parameter_size: usize,
-//) -> wgpu::BindGroupLayout {
-//    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-//        entries: &[
-//            wgpu::BindGroupLayoutEntry {
-//                binding: 0,
-//                visibility: wgpu::ShaderStages::COMPUTE,
-//                ty: wgpu::BindingType::Buffer {
-//                    ty: wgpu::BufferBindingType::Uniform,
-//                    has_dynamic_offset: false,
-//                    min_binding_size: wgpu::BufferSize::new(
-//                        (parameter_size * mem::size_of::<f32>()) as _,
-//                    ),
-//                },
-//                count: None,
-//            },
-//            wgpu::BindGroupLayoutEntry {
-//                binding: 1,
-//                visibility: wgpu::ShaderStages::COMPUTE,
-//                ty: wgpu::BindingType::Buffer {
-//                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-//                    has_dynamic_offset: false,
-//                    min_binding_size: wgpu::BufferSize::new((NUM_PARTICLES * 16) as _),
-//                },
-//                count: None,
-//            },
-//            wgpu::BindGroupLayoutEntry {
-//                binding: 2,
-//                visibility: wgpu::ShaderStages::COMPUTE,
-//                ty: wgpu::BindingType::Buffer {
-//                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-//                    has_dynamic_offset: false,
-//                    min_binding_size: wgpu::BufferSize::new((NUM_PARTICLES * 16) as _),
-//                },
-//                count: None,
-//            },
-//        ],
-//        label: None,
-//    })
-//}
 
 fn create_compute_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -716,40 +701,9 @@ fn create_gray_texture(
         format: wgpu::TextureFormat::Rgba32Float,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
     });
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::StorageTexture {
-                    access: wgpu::StorageTextureAccess::WriteOnly,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    format: wgpu::TextureFormat::Rgba32Float,
-                },
-                count: None,
-            },
-        ],
-        label: Some("grayscale bind group layout"),
-    });
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("grayscale pipeline"),
-        layout: Some(
-            &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("gray scale pipeline layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
-            }),
-        ),
+        layout: None,
         module: &shader,
         entry_point: "main",
     });
@@ -893,4 +847,24 @@ fn create_cache_texture(
     }
     queue.submit(Some(encoder.finish()));
     return output_texture;
+}
+
+fn save_gif(path: &str, frames: &mut Vec<Vec<u8>>, speed: i32, size: u16) -> anyhow::Result<()> {
+    use gif::{Encoder, Frame, Repeat};
+
+    let mut image = std::fs::File::create(path)?;
+    let mut encoder = Encoder::new(&mut image, size, size, &[])?;
+    encoder.set_repeat(Repeat::Infinite)?;
+
+    for mut frame in frames {
+        encoder.write_frame(&Frame::from_rgba_speed(size, size, &mut frame, speed))?;
+    }
+
+    Ok(())
+}
+
+fn padded_bytes_per_row(width: u32) -> usize {
+    let bytes_per_row = width as usize * 4;
+    let padding = (256 - bytes_per_row % 256) % 256;
+    bytes_per_row + padding
 }

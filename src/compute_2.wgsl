@@ -61,6 +61,16 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
   let Epsilon = 0.0000001;
 
   let texel1 = get_texel(t, vPos.x, vPos.y);
+  let texel2 = get_texel(t2, vPos.x, vPos.y);
+
+  var acc : vec2<f32> = vec2<f32>(0.0, 0.0);
+  let theta = params.fc * params.pi / 360.0;
+
+  if (vPos.x > cos(theta)) {
+    acc = vec2<f32>(texel1[0], texel1[1]);
+  } else {
+    acc = vec2<f32>(texel2[0], texel2[1]);
+  }
 
   var acc : vec2<f32> = vec2<f32>(texel1[0], texel1[1]);
 
@@ -109,3 +119,4 @@ fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
 
   particlesDst[index] = Particle(pos, vel, acc);
 }
+

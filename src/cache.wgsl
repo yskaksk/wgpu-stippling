@@ -17,6 +17,14 @@ fn rotate(v: f32) -> f32 {
     }
 }
 
+fn coord_to_pos(x: i32, y: i32, width: i32, height: i32) -> vec2<f32> {
+    let pos = vec2<f32>(
+        2.0 * f32(x) / f32(width) - 1.0,
+        1.0 - 2.0 * f32(y) / f32(height)
+    );
+    return pos;
+}
+
 @stage(compute)
 @workgroup_size(16, 16)
 fn main(
@@ -32,10 +40,7 @@ fn main(
         return;
     }
 
-    let pos = vec2<f32>(
-        2.0 * f32(coords.x) / f32(width) - 1.0,
-        1.0 - 2.0 * f32(coords.y) / f32(height)
-    );
+    let pos = coord_to_pos(coords.x, coords.y, width, height);
 
     var acc : vec2<f32> = vec2<f32>(0.0, 0.0);
     var total_q : f32 = 0.0;
@@ -54,10 +59,7 @@ fn main(
             let bmpQ = params.blank_level - gray;
             total_q += bmpQ;
 
-            let texpos = vec2<f32>(
-                2.0 * f32(ix) / f32(width) - 1.0,
-                1.0 - 2.0 * f32(iy) / f32(height)
-            );
+            let texpos = coord_to_pos(ix, iy, width, height);
             var dp : vec2<f32> = texpos - pos;
             dp.x = rotate(dp.x);
             dp.y = rotate(dp.y);
