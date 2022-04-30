@@ -1,4 +1,5 @@
 use image::{self, DynamicImage, GenericImageView};
+use pollster::FutureExt;
 use rand::{
     distributions::{Distribution, Uniform},
     SeedableRng,
@@ -11,7 +12,6 @@ use winit::{
     event_loop::{ControlFlow, EventLoop},
     window::{Window, WindowBuilder},
 };
-use pollster::FutureExt;
 
 const PARTICLES_PER_GROUP: u32 = 64;
 
@@ -218,7 +218,7 @@ impl Model {
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Bgra8UnormSrgb,
             usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            label: None
+            label: None,
         });
         let color_attachments = [wgpu::RenderPassColorAttachment {
             view: &target_texture.create_view(&wgpu::TextureViewDescriptor::default()),
@@ -249,7 +249,9 @@ impl Model {
 
         let padded_bytes_per_row = padded_bytes_per_row(self.texture_size.width);
         let unpadded_bytes_per_row = self.texture_size.width as usize * 4;
-        let output_buffer_size = padded_bytes_per_row as u64 * self.texture_size.height as u64 * std::mem::size_of::<u8>() as u64;
+        let output_buffer_size = padded_bytes_per_row as u64
+            * self.texture_size.height as u64
+            * std::mem::size_of::<u8>() as u64;
         let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: output_buffer_size,
@@ -271,7 +273,7 @@ impl Model {
                     rows_per_image: std::num::NonZeroU32::new(self.texture_size.height),
                 },
             },
-            self.texture_size
+            self.texture_size,
         );
         self.queue.submit(Some(command_encoder.finish()));
 
@@ -283,9 +285,9 @@ impl Model {
 
         let data = padded_data
             .chunks(padded_bytes_per_row as _)
-            .map(|chunk| { &chunk[..unpadded_bytes_per_row as _] })
+            .map(|chunk| &chunk[..unpadded_bytes_per_row as _])
             .flatten()
-            .map(|x| { *x })
+            .map(|x| *x)
             .collect::<Vec<_>>();
         drop(padded_data);
         output_buffer.unmap();
@@ -354,7 +356,13 @@ impl Model {
 
         if self.frame_num == 270 {
             println!("saving...");
-            save_gif("output.gif", &mut self.frames, 1, self.texture_size.width as u16).unwrap();
+            save_gif(
+                "output.gif",
+                &mut self.frames,
+                1,
+                self.texture_size.width as u16,
+            )
+            .unwrap();
             println!("saved!!!");
         }
 
@@ -842,7 +850,7 @@ fn create_cache_texture(
 }
 
 fn save_gif(path: &str, frames: &mut Vec<Vec<u8>>, speed: i32, size: u16) -> anyhow::Result<()> {
-    use gif::{Frame, Encoder, Repeat,};
+    use gif::{Encoder, Frame, Repeat};
 
     let mut image = std::fs::File::create(path)?;
     let mut encoder = Encoder::new(&mut image, size, size, &[])?;
