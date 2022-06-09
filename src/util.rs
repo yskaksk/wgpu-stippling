@@ -1,7 +1,7 @@
 use wgpu::util::DeviceExt;
 use wgpu::{
-    BindGroup, BindGroupLayout, BindGroupLayoutEntry, ComputePipeline, Device, RenderPipeline,
-    ShaderModule,
+    BindGroup, BindGroupLayout, BindGroupLayoutEntry, ComputePipeline, Device, Extent3d,
+    RenderPipeline, ShaderModule, Texture, TextureFormat, TextureUsages,
 };
 
 pub fn create_compute_pipeline(
@@ -204,4 +204,55 @@ pub fn create_buffer<'a>(
         contents,
         usage,
     })
+}
+
+pub fn create_texture(
+    device: &Device,
+    size: Extent3d,
+    format: TextureFormat,
+    usage: TextureUsages,
+) -> Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage,
+        label: None,
+    })
+}
+
+pub fn compute_work_group_count(
+    (width, height): (u32, u32),
+    (workgroup_width, workgroup_height): (u32, u32),
+) -> (u32, u32) {
+    let x = (width + workgroup_width - 1) / workgroup_width;
+    let y = (height + workgroup_height - 1) / workgroup_height;
+    return (x, y);
+}
+
+pub fn save_gif(
+    path: &str,
+    frames: &mut Vec<Vec<u8>>,
+    speed: i32,
+    size: u16,
+) -> anyhow::Result<()> {
+    use gif::{Encoder, Frame, Repeat};
+
+    let mut image = std::fs::File::create(path)?;
+    let mut encoder = Encoder::new(&mut image, size, size, &[])?;
+    encoder.set_repeat(Repeat::Infinite)?;
+
+    for mut frame in frames {
+        encoder.write_frame(&Frame::from_rgba_speed(size, size, &mut frame, speed))?;
+    }
+
+    Ok(())
+}
+
+pub fn padded_bytes_per_row(width: u32) -> usize {
+    let bytes_per_row = width as usize * 4;
+    let padding = (256 - bytes_per_row % 256) % 256;
+    bytes_per_row + padding
 }

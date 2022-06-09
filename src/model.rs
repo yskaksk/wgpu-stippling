@@ -5,13 +5,12 @@ use rand::{
     SeedableRng,
 };
 use std::mem;
-use wgpu::util::DeviceExt;
-use wgpu::BufferUsages;
+use wgpu::{BufferUsages, TextureFormat, TextureUsages};
 use winit::{event::*, window::Window};
 
 use crate::util::{
-    create_buffer, create_compute_pipeline, create_render_pipeline, BindGroupBuilder,
-    BindGroupLayoutBuilder,
+    compute_work_group_count, create_buffer, create_compute_pipeline, create_render_pipeline,
+    create_texture, padded_bytes_per_row, save_gif, BindGroupBuilder, BindGroupLayoutBuilder,
 };
 
 const PARTICLES_PER_GROUP: u32 = 64;
@@ -205,15 +204,12 @@ impl Model {
         let mut command_encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        let target_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            size: self.texture_size,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
-            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            label: None,
-        });
+        let target_texture = create_texture(
+            &self.device,
+            self.texture_size,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureUsages::COPY_SRC | TextureUsages::RENDER_ATTACHMENT,
+        );
         let color_attachments = [wgpu::RenderPassColorAttachment {
             view: &target_texture.create_view(&wgpu::TextureViewDescriptor::default()),
             resolve_target: None,
@@ -437,15 +433,6 @@ fn create_particle_buffers(device: &wgpu::Device) -> Vec<wgpu::Buffer> {
     return particle_buffers;
 }
 
-fn compute_work_group_count(
-    (width, height): (u32, u32),
-    (workgroup_width, workgroup_height): (u32, u32),
-) -> (u32, u32) {
-    let x = (width + workgroup_width - 1) / workgroup_width;
-    let y = (height + workgroup_height - 1) / workgroup_height;
-    return (x, y);
-}
-
 fn create_gray_texture(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -453,15 +440,12 @@ fn create_gray_texture(
     shader: &wgpu::ShaderModule,
     texture_size: wgpu::Extent3d,
 ) -> wgpu::Texture {
-    let input_texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("input"),
-        size: texture_size,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-    });
+    let input_texture = create_texture(
+        device,
+        texture_size,
+        TextureFormat::Rgba8UnormSrgb,
+        TextureUsages::TEXTURE_BINDING | TextureUsages::COPY_DST,
+    );
     queue.write_texture(
         input_texture.as_image_copy(),
         &input_image.to_rgba8(),
@@ -472,15 +456,12 @@ fn create_gray_texture(
         },
         texture_size,
     );
-    let output_texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("gray texture"),
-        size: texture_size,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
-    });
+    let output_texture = create_texture(
+        device,
+        texture_size,
+        TextureFormat::Rgba32Float,
+        TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+    );
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("grayscale pipeline"),
         layout: None,
@@ -522,15 +503,12 @@ fn create_cache_texture(
     shader: &wgpu::ShaderModule,
     texture_size: wgpu::Extent3d,
 ) -> wgpu::Texture {
-    let output_texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("cache texture"),
-        size: texture_size,
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba32Float,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
-    });
+    let output_texture = create_texture(
+        device,
+        texture_size,
+        TextureFormat::Rgba32Float,
+        TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
+    );
     let param = vec![BLANK_LEVEL, NUM_PARTICLES as f32 * Q_CHARGE];
     let param_buffer = create_buffer(
         device,
@@ -554,18 +532,7 @@ fn create_cache_texture(
             &output_texture.create_view(&wgpu::TextureViewDescriptor::default()),
         ))
         .create_bind_group(device, Some("cache scale bind group"), &bind_group_layout);
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("cache pipeline"),
-        layout: Some(
-            &device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("cache pipeline layout"),
-                bind_group_layouts: &[&bind_group_layout],
-                push_constant_ranges: &[],
-            }),
-        ),
-        module: &shader,
-        entry_point: "main",
-    });
+    let pipeline = create_compute_pipeline(device, &[&bind_group_layout], &shader);
     let mut encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
@@ -579,24 +546,4 @@ fn create_cache_texture(
     }
     queue.submit(Some(encoder.finish()));
     return output_texture;
-}
-
-fn save_gif(path: &str, frames: &mut Vec<Vec<u8>>, speed: i32, size: u16) -> anyhow::Result<()> {
-    use gif::{Encoder, Frame, Repeat};
-
-    let mut image = std::fs::File::create(path)?;
-    let mut encoder = Encoder::new(&mut image, size, size, &[])?;
-    encoder.set_repeat(Repeat::Infinite)?;
-
-    for mut frame in frames {
-        encoder.write_frame(&Frame::from_rgba_speed(size, size, &mut frame, speed))?;
-    }
-
-    Ok(())
-}
-
-fn padded_bytes_per_row(width: u32) -> usize {
-    let bytes_per_row = width as usize * 4;
-    let padding = (256 - bytes_per_row % 256) % 256;
-    bytes_per_row + padding
 }
