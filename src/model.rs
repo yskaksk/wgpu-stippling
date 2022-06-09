@@ -8,7 +8,9 @@ use std::mem;
 use wgpu::util::DeviceExt;
 use winit::{event::*, window::Window};
 
-use crate::util::{create_compute_pipeline, create_render_pipeline, BindGroupLayoutBuilder};
+use crate::util::{
+    create_compute_pipeline, create_render_pipeline, BindGroupBuilder, BindGroupLayoutBuilder,
+};
 
 const PARTICLES_PER_GROUP: u32 = 64;
 const DOT_SIZE: f32 = 0.005;
@@ -115,35 +117,29 @@ impl Model {
             .add_uniform_buffer(wgpu::BufferSize::new(
                 (param_data.len() * mem::size_of::<f32>()) as _,
             ))
-            .create_bindg_group_layout(&device, None);
+            .create_bind_group_layout(&device, None);
 
         let texture_bind_group_layout = BindGroupLayoutBuilder::new()
             .add_texture()
             .add_texture()
-            .create_bindg_group_layout(&device, Some("texture bind group layout"));
-        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(
-                        &cache_texture.create_view(&wgpu::TextureViewDescriptor::default()),
-                    ),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(
-                        &cache_texture2.create_view(&wgpu::TextureViewDescriptor::default()),
-                    ),
-                },
-            ],
-            label: Some("texture bind group"),
-        });
+            .create_bind_group_layout(&device, Some("texture bind group layout"));
+        let texture_bind_group = BindGroupBuilder::new()
+            .add_resource(wgpu::BindingResource::TextureView(
+                &cache_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            ))
+            .add_resource(wgpu::BindingResource::TextureView(
+                &cache_texture2.create_view(&wgpu::TextureViewDescriptor::default()),
+            ))
+            .create_bind_group(
+                &device,
+                Some("texture bind group"),
+                &texture_bind_group_layout,
+            );
 
         let compute_bind_group_layout = BindGroupLayoutBuilder::new()
             .add_storage_buffer(wgpu::BufferSize::new((NUM_PARTICLES * 16) as _), true)
             .add_storage_buffer(wgpu::BufferSize::new((NUM_PARTICLES * 16) as _), false)
-            .create_bindg_group_layout(&device, None);
+            .create_bind_group_layout(&device, None);
         let compute_pipeline = create_compute_pipeline(
             &device,
             &[
@@ -171,8 +167,12 @@ impl Model {
 
         let vertices_buffer = create_vertices_buffer(&device);
         let particle_buffers = create_particle_buffers(&device);
-        let particle_bind_groups =
-            create_particle_bind_groups(&device, &compute_bind_group_layout, &particle_buffers);
+        let particle_bind_groups = Vec::from_iter((0..2).map(|i| {
+            BindGroupBuilder::new()
+                .add_resource(particle_buffers[i].as_entire_binding())
+                .add_resource(particle_buffers[(i + 1) % 2].as_entire_binding())
+                .create_bind_group(&device, None, &compute_bind_group_layout)
+        }));
         let frames = Vec::new();
 
         Model {
@@ -290,11 +290,9 @@ impl Model {
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let parameter_data = create_param_data(self.frame_num as f32);
         let parameter_buffer = create_parameter_buffer(&self.device, &parameter_data);
-        let parameter_bind_group = create_parameter_bind_group(
-            &self.device,
-            &self.parameter_bind_group_layout,
-            &parameter_buffer,
-        );
+        let parameter_bind_group = BindGroupBuilder::new()
+            .add_resource(parameter_buffer.as_entire_binding())
+            .create_bind_group(&self.device, None, &self.parameter_bind_group_layout);
         let mut command_encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -439,46 +437,6 @@ fn create_parameter_buffer(device: &wgpu::Device, param_data: &Vec<f32>) -> wgpu
     })
 }
 
-fn create_parameter_bind_group(
-    device: &wgpu::Device,
-    parameter_bind_group_layout: &wgpu::BindGroupLayout,
-    parameter_buffer: &wgpu::Buffer,
-) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: &parameter_bind_group_layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: parameter_buffer.as_entire_binding(),
-        }],
-        label: None,
-    })
-}
-
-fn create_particle_bind_groups(
-    device: &wgpu::Device,
-    compute_bind_group_layout: &wgpu::BindGroupLayout,
-    particle_buffers: &Vec<wgpu::Buffer>,
-) -> Vec<wgpu::BindGroup> {
-    let mut particle_bind_groups = Vec::<wgpu::BindGroup>::new();
-    for i in 0..2 {
-        particle_bind_groups.push(device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &compute_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: particle_buffers[i].as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: particle_buffers[(i + 1) % 2].as_entire_binding(),
-                },
-            ],
-            label: None,
-        }));
-    }
-    return particle_bind_groups;
-}
-
 fn compute_work_group_count(
     (width, height): (u32, u32),
     (workgroup_width, workgroup_height): (u32, u32),
@@ -529,24 +487,18 @@ fn create_gray_texture(
         module: &shader,
         entry_point: "main",
     });
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("gray scale bind group"),
-        layout: &pipeline.get_bind_group_layout(0),
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(
-                    &input_texture.create_view(&wgpu::TextureViewDescriptor::default()),
-                ),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(
-                    &output_texture.create_view(&wgpu::TextureViewDescriptor::default()),
-                ),
-            },
-        ],
-    });
+    let bind_group = BindGroupBuilder::new()
+        .add_resource(wgpu::BindingResource::TextureView(
+            &input_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        ))
+        .add_resource(wgpu::BindingResource::TextureView(
+            &output_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        ))
+        .create_bind_group(
+            &device,
+            Some("gray scale bind group"),
+            &pipeline.get_bind_group_layout(0),
+        );
     let mut encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
     {
@@ -591,29 +543,16 @@ fn create_cache_texture(
         ))
         .add_texture()
         .add_storage_texture()
-        .create_bindg_group_layout(device, Some("cache bind group layout"));
-    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("cache scale bind group"),
-        layout: &bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: param_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::TextureView(
-                    &input_texture.create_view(&wgpu::TextureViewDescriptor::default()),
-                ),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(
-                    &output_texture.create_view(&wgpu::TextureViewDescriptor::default()),
-                ),
-            },
-        ],
-    });
+        .create_bind_group_layout(device, Some("cache bind group layout"));
+    let bind_group = BindGroupBuilder::new()
+        .add_resource(param_buffer.as_entire_binding())
+        .add_resource(wgpu::BindingResource::TextureView(
+            &input_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        ))
+        .add_resource(wgpu::BindingResource::TextureView(
+            &output_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+        ))
+        .create_bind_group(device, Some("cache scale bind group"), &bind_group_layout);
     let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("cache pipeline"),
         layout: Some(

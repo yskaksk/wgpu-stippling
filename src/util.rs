@@ -1,5 +1,6 @@
 use wgpu::{
-    BindGroupLayout, BindGroupLayoutEntry, ComputePipeline, Device, RenderPipeline, ShaderModule,
+    BindGroup, BindGroupLayout, BindGroupLayoutEntry, ComputePipeline, Device, RenderPipeline,
+    ShaderModule,
 };
 
 pub fn create_compute_pipeline(
@@ -140,7 +141,7 @@ impl BindGroupLayoutBuilder {
         }
     }
 
-    pub fn create_bindg_group_layout(
+    pub fn create_bind_group_layout(
         &self,
         device: &Device,
         label: Option<&str>,
@@ -148,6 +149,45 @@ impl BindGroupLayoutBuilder {
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &self.entries,
             label,
+        })
+    }
+}
+
+pub struct BindGroupBuilder<'a> {
+    entries: Vec<wgpu::BindGroupEntry<'a>>,
+    binding: u32,
+}
+
+impl<'a> BindGroupBuilder<'a> {
+    pub fn new() -> Self {
+        BindGroupBuilder {
+            entries: Vec::new(),
+            binding: 0,
+        }
+    }
+
+    pub fn add_resource(&self, resource: wgpu::BindingResource<'a>) -> Self {
+        let mut entries = self.entries.clone();
+        entries.push(wgpu::BindGroupEntry {
+            binding: self.binding,
+            resource,
+        });
+        BindGroupBuilder {
+            entries,
+            binding: self.binding + 1,
+        }
+    }
+
+    pub fn create_bind_group(
+        &self,
+        device: &Device,
+        label: Option<&str>,
+        layout: &BindGroupLayout,
+    ) -> BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label,
+            layout,
+            entries: &self.entries,
         })
     }
 }
