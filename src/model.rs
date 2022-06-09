@@ -8,7 +8,7 @@ use std::mem;
 use wgpu::util::DeviceExt;
 use winit::{event::*, window::Window};
 
-use crate::util::{create_compute_pipeline, create_render_pipeline};
+use crate::util::{create_compute_pipeline, create_render_pipeline, BindGroupLayoutBuilder};
 
 const PARTICLES_PER_GROUP: u32 = 64;
 const DOT_SIZE: f32 = 0.005;
@@ -111,35 +111,16 @@ impl Model {
         );
 
         let param_data = create_param_data(0.0);
-        let parameter_bind_group_layout =
-            create_parameter_bind_group_layout(&device, param_data.len());
+        let parameter_bind_group_layout = BindGroupLayoutBuilder::new()
+            .add_uniform_buffer(wgpu::BufferSize::new(
+                (param_data.len() * mem::size_of::<f32>()) as _,
+            ))
+            .create_bindg_group_layout(&device, None);
 
-        let texture_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                        },
-                        count: None,
-                    },
-                ],
-                label: Some("texture bind group layout"),
-            });
+        let texture_bind_group_layout = BindGroupLayoutBuilder::new()
+            .add_texture()
+            .add_texture()
+            .create_bindg_group_layout(&device, Some("texture bind group layout"));
         let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &texture_bind_group_layout,
             entries: &[
@@ -159,7 +140,10 @@ impl Model {
             label: Some("texture bind group"),
         });
 
-        let compute_bind_group_layout = create_compute_bind_group_layout(&device);
+        let compute_bind_group_layout = BindGroupLayoutBuilder::new()
+            .add_storage_buffer(wgpu::BufferSize::new((NUM_PARTICLES * 16) as _), true)
+            .add_storage_buffer(wgpu::BufferSize::new((NUM_PARTICLES * 16) as _), false)
+            .create_bindg_group_layout(&device, None);
         let compute_pipeline = create_compute_pipeline(
             &device,
             &[
@@ -399,55 +383,6 @@ fn create_param_data(frame_count: f32) -> Vec<f32> {
     ];
 }
 
-fn create_parameter_bind_group_layout(
-    device: &wgpu::Device,
-    parameter_size: usize,
-) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        entries: &[wgpu::BindGroupLayoutEntry {
-            binding: 0,
-            visibility: wgpu::ShaderStages::COMPUTE,
-            ty: wgpu::BindingType::Buffer {
-                ty: wgpu::BufferBindingType::Uniform,
-                has_dynamic_offset: false,
-                min_binding_size: wgpu::BufferSize::new(
-                    (parameter_size * mem::size_of::<f32>()) as _,
-                ),
-            },
-            count: None,
-        }],
-        label: None,
-    })
-}
-
-fn create_compute_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new((NUM_PARTICLES * 16) as _),
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new((NUM_PARTICLES * 16) as _),
-                },
-                count: None,
-            },
-        ],
-        label: None,
-    })
-}
-
 fn create_vertices_buffer(device: &wgpu::Device) -> wgpu::Buffer {
     // 8 * 6
     let mut vertex_buffer_data: [f32; 48] = [0.0; 48];
@@ -650,43 +585,13 @@ fn create_cache_texture(
         contents: bytemuck::cast_slice(&param),
         usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
     });
-    let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        entries: &[
-            wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(
-                        (param.len() * mem::size_of::<f32>()) as _,
-                    ),
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 1,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
-                },
-                count: None,
-            },
-            wgpu::BindGroupLayoutEntry {
-                binding: 2,
-                visibility: wgpu::ShaderStages::COMPUTE,
-                ty: wgpu::BindingType::StorageTexture {
-                    access: wgpu::StorageTextureAccess::WriteOnly,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    format: wgpu::TextureFormat::Rgba32Float,
-                },
-                count: None,
-            },
-        ],
-        label: Some("cache bind group layout"),
-    });
+    let bind_group_layout = BindGroupLayoutBuilder::new()
+        .add_uniform_buffer(wgpu::BufferSize::new(
+            (param.len() * mem::size_of::<f32>()) as _,
+        ))
+        .add_texture()
+        .add_storage_texture()
+        .create_bindg_group_layout(device, Some("cache bind group layout"));
     let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("cache scale bind group"),
         layout: &bind_group_layout,

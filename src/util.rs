@@ -1,4 +1,6 @@
-use wgpu::{BindGroupLayout, ComputePipeline, Device, RenderPipeline, ShaderModule};
+use wgpu::{
+    BindGroupLayout, BindGroupLayoutEntry, ComputePipeline, Device, RenderPipeline, ShaderModule,
+};
 
 pub fn create_compute_pipeline(
     device: &Device,
@@ -21,7 +23,7 @@ pub fn create_compute_pipeline(
 pub fn create_render_pipeline(
     device: &Device,
     config: &wgpu::SurfaceConfiguration,
-    vertex_buffers: &[wgpu::VertexBufferLayout],
+    vertex_buffer_layouts: &[wgpu::VertexBufferLayout],
     shader: &ShaderModule,
 ) -> RenderPipeline {
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -35,7 +37,7 @@ pub fn create_render_pipeline(
         vertex: wgpu::VertexState {
             module: &shader,
             entry_point: "main_vs",
-            buffers: vertex_buffers,
+            buffers: vertex_buffer_layouts,
         },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
@@ -47,4 +49,105 @@ pub fn create_render_pipeline(
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
     })
+}
+
+pub struct BindGroupLayoutBuilder {
+    entries: Vec<BindGroupLayoutEntry>,
+    binding: u32,
+}
+
+impl BindGroupLayoutBuilder {
+    pub fn new() -> Self {
+        BindGroupLayoutBuilder {
+            entries: vec![],
+            binding: 0,
+        }
+    }
+
+    pub fn add_texture(&self) -> Self {
+        let mut entries = self.entries.clone();
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: self.binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Texture {
+                multisampled: false,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            },
+            count: None,
+        });
+        BindGroupLayoutBuilder {
+            entries,
+            binding: self.binding + 1,
+        }
+    }
+
+    pub fn add_storage_texture(&self) -> Self {
+        let mut entries = self.entries.clone();
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: 2,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::StorageTexture {
+                access: wgpu::StorageTextureAccess::WriteOnly,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                format: wgpu::TextureFormat::Rgba32Float,
+            },
+            count: None,
+        });
+        BindGroupLayoutBuilder {
+            entries,
+            binding: self.binding + 1,
+        }
+    }
+
+    pub fn add_uniform_buffer(&self, min_binding_size: Option<wgpu::BufferSize>) -> Self {
+        let mut entries = self.entries.clone();
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: self.binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size,
+            },
+            count: None,
+        });
+        BindGroupLayoutBuilder {
+            entries,
+            binding: self.binding + 1,
+        }
+    }
+
+    pub fn add_storage_buffer(
+        &self,
+        min_binding_size: Option<wgpu::BufferSize>,
+        read_only: bool,
+    ) -> Self {
+        let mut entries = self.entries.clone();
+        entries.push(wgpu::BindGroupLayoutEntry {
+            binding: self.binding,
+            visibility: wgpu::ShaderStages::COMPUTE,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only },
+                has_dynamic_offset: false,
+                min_binding_size,
+            },
+            count: None,
+        });
+        BindGroupLayoutBuilder {
+            entries,
+            binding: self.binding + 1,
+        }
+    }
+
+    pub fn create_bindg_group_layout(
+        &self,
+        device: &Device,
+        label: Option<&str>,
+    ) -> BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &self.entries,
+            label,
+        })
+    }
 }
