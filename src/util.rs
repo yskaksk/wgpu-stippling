@@ -1,3 +1,4 @@
+use wgpu::util::DeviceExt;
 use wgpu::{
     BindGroup, BindGroupLayout, BindGroupLayoutEntry, ComputePipeline, Device, RenderPipeline,
     ShaderModule,
@@ -190,4 +191,17 @@ impl<'a> BindGroupBuilder<'a> {
             entries: &self.entries,
         })
     }
+}
+
+pub fn create_buffer<'a>(
+    device: &Device,
+    contents: &'a [u8],
+    usage: wgpu::BufferUsages,
+    label: Option<&str>,
+) -> wgpu::Buffer {
+    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label,
+        contents,
+        usage,
+    })
 }

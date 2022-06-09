@@ -6,10 +6,12 @@ use rand::{
 };
 use std::mem;
 use wgpu::util::DeviceExt;
+use wgpu::BufferUsages;
 use winit::{event::*, window::Window};
 
 use crate::util::{
-    create_compute_pipeline, create_render_pipeline, BindGroupBuilder, BindGroupLayoutBuilder,
+    create_buffer, create_compute_pipeline, create_render_pipeline, BindGroupBuilder,
+    BindGroupLayoutBuilder,
 };
 
 const PARTICLES_PER_GROUP: u32 = 64;
@@ -289,7 +291,12 @@ impl Model {
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let parameter_data = create_param_data(self.frame_num as f32);
-        let parameter_buffer = create_parameter_buffer(&self.device, &parameter_data);
+        let parameter_buffer = create_buffer(
+            &self.device,
+            bytemuck::cast_slice(&parameter_data),
+            BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            Some("Parameter Buffer"),
+        );
         let parameter_bind_group = BindGroupBuilder::new()
             .add_resource(parameter_buffer.as_entire_binding())
             .create_bind_group(&self.device, None, &self.parameter_bind_group_layout);
@@ -393,11 +400,12 @@ fn create_vertices_buffer(device: &wgpu::Device) -> wgpu::Buffer {
         vertex_buffer_data[6 * i + 4] = DOT_SIZE * ((i as f32 + 1.0) * theta).cos();
         vertex_buffer_data[6 * i + 5] = DOT_SIZE * ((i as f32 + 1.0) * theta).sin();
     }
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Vertex Buffer"),
-        contents: bytemuck::bytes_of(&vertex_buffer_data),
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-    })
+    create_buffer(
+        device,
+        bytemuck::bytes_of(&vertex_buffer_data),
+        BufferUsages::VERTEX | BufferUsages::COPY_DST,
+        Some("Vertex Buffer"),
+    )
 }
 
 fn create_particle_buffers(device: &wgpu::Device) -> Vec<wgpu::Buffer> {
@@ -414,27 +422,19 @@ fn create_particle_buffers(device: &wgpu::Device) -> Vec<wgpu::Buffer> {
     }
 
     let mut particle_buffers = Vec::<wgpu::Buffer>::new();
+    let usage = BufferUsages::VERTEX
+        | BufferUsages::STORAGE
+        | BufferUsages::COPY_DST
+        | BufferUsages::MAP_READ;
     for i in 0..2 {
-        particle_buffers.push(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&format!("Particle Buffer {}", i)),
-                contents: bytemuck::cast_slice(&initial_particle_data),
-                usage: wgpu::BufferUsages::VERTEX
-                    | wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST
-                    | wgpu::BufferUsages::MAP_READ,
-            }),
-        );
+        particle_buffers.push(create_buffer(
+            device,
+            bytemuck::cast_slice(&initial_particle_data),
+            usage,
+            Some(&format!("Particle Bufeer {}", i)),
+        ));
     }
     return particle_buffers;
-}
-
-fn create_parameter_buffer(device: &wgpu::Device, param_data: &Vec<f32>) -> wgpu::Buffer {
-    device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Parameter Buffer"),
-        contents: bytemuck::cast_slice(&param_data),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    })
 }
 
 fn compute_work_group_count(
@@ -532,11 +532,12 @@ fn create_cache_texture(
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
     });
     let param = vec![BLANK_LEVEL, NUM_PARTICLES as f32 * Q_CHARGE];
-    let param_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("cache param buffer"),
-        contents: bytemuck::cast_slice(&param),
-        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-    });
+    let param_buffer = create_buffer(
+        device,
+        bytemuck::cast_slice(&param),
+        BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+        Some("cache param buffer"),
+    );
     let bind_group_layout = BindGroupLayoutBuilder::new()
         .add_uniform_buffer(wgpu::BufferSize::new(
             (param.len() * mem::size_of::<f32>()) as _,
