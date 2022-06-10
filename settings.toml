@@ -1,0 +1,8 @@
+particles_per_group = 64
+dot_size = 0.005
+num_particles = 16384
+q_charge = 0.05
+blank_level = 0.95
+time_delta = 0.001
+d_max = 0.005
+sustain = 0.95
