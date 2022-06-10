@@ -17,3 +17,5 @@ env_logger = "0.9"
 cgmath = "0.18"
 gif = "0.11"
 anyhow = "1.0"
+toml = "0.5"
+serde = { version = "1.0", features = ["derive"] }

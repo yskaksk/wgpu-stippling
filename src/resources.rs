@@ -7,20 +7,33 @@ use std::mem;
 use image::{DynamicImage, GenericImageView};
 use wgpu::{BufferUsages, Device, Queue, ShaderModule, Texture, TextureFormat, TextureUsages};
 
-const PARTICLES_PER_GROUP: u32 = 64;
-const DOT_SIZE: f32 = 0.005;
-
-const NUM_PARTICLES: u32 = 16384;
-const Q_CHARGE: f32 = 0.05;
-const BLANK_LEVEL: f32 = 0.95;
-const TIME_DELTA: f32 = 0.001;
-const D_MAX: f32 = 0.005;
-const SUSTAIN: f32 = 0.95;
+use serde::Deserialize;
+use toml;
 
 use crate::util::{
     compute_work_group_count, create_buffer, create_compute_pipeline, create_render_pipeline,
     create_texture, BindGroupBuilder, BindGroupLayoutBuilder,
 };
+
+#[derive(Deserialize)]
+struct Settings {
+    particles_per_group: u32,
+    dot_size: f32,
+    num_particles: u32,
+    q_charge: f32,
+    blank_level: f32,
+    time_delta: f32,
+    d_max: f32,
+    sustain: f32,
+}
+
+impl Settings {
+    fn new() -> Self {
+        let fstr = std::fs::read_to_string("./settings.toml").unwrap();
+        let settings: Self = toml::from_str(&fstr).unwrap();
+        return settings;
+    }
+}
 
 pub struct ImgShaders {
     gray_shader: wgpu::ShaderModule,
@@ -39,6 +52,7 @@ impl ImgShaders {
         device: &Device,
         queue: &Queue,
         img: &DynamicImage,
+        settings: &Settings,
     ) -> Texture {
         let (w, h) = img.dimensions();
         let texture_size = wgpu::Extent3d {
@@ -105,7 +119,10 @@ impl ImgShaders {
             TextureFormat::Rgba32Float,
             TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
         );
-        let param = vec![BLANK_LEVEL, NUM_PARTICLES as f32 * Q_CHARGE];
+        let param = vec![
+            settings.blank_level,
+            settings.num_particles as f32 * settings.q_charge,
+        ];
         let param_buffer = create_buffer(
             device,
             bytemuck::cast_slice(&param),
@@ -154,6 +171,7 @@ pub struct Resources {
     compute_pipeline: wgpu::ComputePipeline,
     render_pipeline: wgpu::RenderPipeline,
     work_group_count: u32,
+    settings: Settings,
 }
 
 impl Resources {
@@ -167,19 +185,28 @@ impl Resources {
         compute_shader: &ShaderModule,
         draw_shader: &ShaderModule,
     ) -> Self {
-        let param_data = Self::create_param_data(0.0);
+        let settings = Settings::new();
+        let param_data = Self::create_param_data(0.0, &settings);
         let parameter_bind_group_layout = BindGroupLayoutBuilder::new()
             .add_uniform_buffer(wgpu::BufferSize::new(
                 (param_data.len() * mem::size_of::<f32>()) as _,
             ))
             .create_bind_group_layout(&device, None);
         let compute_bind_group_layout = BindGroupLayoutBuilder::new()
-            .add_storage_buffer(wgpu::BufferSize::new((NUM_PARTICLES * 16) as _), true)
-            .add_storage_buffer(wgpu::BufferSize::new((NUM_PARTICLES * 16) as _), false)
+            .add_storage_buffer(
+                wgpu::BufferSize::new((settings.num_particles * 16) as _),
+                true,
+            )
+            .add_storage_buffer(
+                wgpu::BufferSize::new((settings.num_particles * 16) as _),
+                false,
+            )
             .create_bind_group_layout(&device, None);
 
-        let cache_texture1 = img_shaders.create_precalculated_texture(device, queue, img1);
-        let cache_texture2 = img_shaders.create_precalculated_texture(device, queue, img2);
+        let cache_texture1 =
+            img_shaders.create_precalculated_texture(device, queue, img1, &settings);
+        let cache_texture2 =
+            img_shaders.create_precalculated_texture(device, queue, img2, &settings);
         let texture_bind_group_layout = BindGroupLayoutBuilder::new()
             .add_texture()
             .add_texture()
@@ -219,8 +246,8 @@ impl Resources {
         ];
         let render_pipeline =
             create_render_pipeline(device, config, vertex_buffer_layouts, draw_shader);
-        let vertices_buffer = Self::create_vertices_buffer(&device);
-        let particle_buffers = Self::create_particle_buffers(&device);
+        let vertices_buffer = Self::create_vertices_buffer(&device, &settings);
+        let particle_buffers = Self::create_particle_buffers(&device, &settings);
         let particle_bind_groups = Self::create_particle_bind_groups(
             device,
             &particle_buffers,
@@ -235,12 +262,15 @@ impl Resources {
             texture_bind_group,
             compute_pipeline,
             render_pipeline,
-            work_group_count: ((NUM_PARTICLES as f32) / (PARTICLES_PER_GROUP as f32)).ceil() as u32,
+            work_group_count: ((settings.num_particles as f32)
+                / (settings.particles_per_group as f32))
+                .ceil() as u32,
+            settings,
         }
     }
 
-    fn create_particle_buffers(device: &wgpu::Device) -> Vec<wgpu::Buffer> {
-        let mut initial_particle_data: Vec<f32> = vec![0.0; (6 * NUM_PARTICLES) as usize];
+    fn create_particle_buffers(device: &wgpu::Device, settings: &Settings) -> Vec<wgpu::Buffer> {
+        let mut initial_particle_data: Vec<f32> = vec![0.0; (6 * settings.num_particles) as usize];
         let mut rng = rand::rngs::StdRng::seed_from_u64(333);
         let unif = Uniform::new_inclusive(-1.0, 1.0);
         for particle_instance_chunk in initial_particle_data.chunks_mut(6) {
@@ -280,17 +310,17 @@ impl Resources {
         }));
         return particle_bind_groups;
     }
-    fn create_vertices_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    fn create_vertices_buffer(device: &wgpu::Device, settings: &Settings) -> wgpu::Buffer {
         // 8 * 6
         let mut vertex_buffer_data: [f32; 48] = [0.0; 48];
         let theta = 2.0 * std::f32::consts::PI / 8.0;
         for i in 0..8 {
             vertex_buffer_data[6 * i] = 0.0;
             vertex_buffer_data[6 * i + 1] = 0.0;
-            vertex_buffer_data[6 * i + 2] = DOT_SIZE * (i as f32 * theta).cos();
-            vertex_buffer_data[6 * i + 3] = DOT_SIZE * (i as f32 * theta).sin();
-            vertex_buffer_data[6 * i + 4] = DOT_SIZE * ((i as f32 + 1.0) * theta).cos();
-            vertex_buffer_data[6 * i + 5] = DOT_SIZE * ((i as f32 + 1.0) * theta).sin();
+            vertex_buffer_data[6 * i + 2] = settings.dot_size * (i as f32 * theta).cos();
+            vertex_buffer_data[6 * i + 3] = settings.dot_size * (i as f32 * theta).sin();
+            vertex_buffer_data[6 * i + 4] = settings.dot_size * ((i as f32 + 1.0) * theta).cos();
+            vertex_buffer_data[6 * i + 5] = settings.dot_size * ((i as f32 + 1.0) * theta).sin();
         }
         create_buffer(
             device,
@@ -299,18 +329,18 @@ impl Resources {
             Some("Vertex Buffer"),
         )
     }
-    fn create_param_data(frame_count: f32) -> Vec<f32> {
-        let dt = TIME_DELTA;
+    fn create_param_data(frame_count: f32, settings: &Settings) -> Vec<f32> {
+        let dt = settings.time_delta;
         let dt_2 = 0.5 * dt;
         let dtt = dt * dt;
-        let v_max = D_MAX / dt;
+        let v_max = settings.d_max / dt;
         let pi = std::f32::consts::PI;
         return vec![
-            Q_CHARGE,
-            BLANK_LEVEL,
-            TIME_DELTA,
-            D_MAX,
-            SUSTAIN,
+            settings.q_charge,
+            settings.blank_level,
+            settings.blank_level,
+            settings.blank_level,
+            settings.sustain,
             dt,
             dt_2,
             dtt,
@@ -326,7 +356,7 @@ impl Resources {
         command_encoder: &mut wgpu::CommandEncoder,
         frame_num: usize,
     ) {
-        let parameter_data = Resources::create_param_data(frame_num as f32);
+        let parameter_data = Resources::create_param_data(frame_num as f32, &self.settings);
         let parameter_buffer = create_buffer(
             device,
             bytemuck::cast_slice(&parameter_data),
@@ -360,6 +390,6 @@ impl Resources {
         render_pass.set_pipeline(&self.render_pipeline);
         render_pass.set_vertex_buffer(0, self.particle_buffers[(frame_num + 1) % 2].slice(..));
         render_pass.set_vertex_buffer(1, self.vertices_buffer.slice(..));
-        render_pass.draw(0..24, 0..NUM_PARTICLES);
+        render_pass.draw(0..24, 0..self.settings.num_particles);
     }
 }
