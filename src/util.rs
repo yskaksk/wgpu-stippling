@@ -1,6 +1,6 @@
 use wgpu::util::DeviceExt;
 use wgpu::{
-    BindGroup, BindGroupLayout, BindGroupLayoutEntry, ComputePipeline, Device, Extent3d,
+    BindGroup, BindGroupLayout, BindGroupLayoutEntry, Buffer, ComputePipeline, Device, Extent3d,
     RenderPipeline, ShaderModule, Texture, TextureFormat, TextureUsages,
 };
 
@@ -198,7 +198,7 @@ pub fn create_buffer<'a>(
     contents: &'a [u8],
     usage: wgpu::BufferUsages,
     label: Option<&str>,
-) -> wgpu::Buffer {
+) -> Buffer {
     device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label,
         contents,
@@ -232,6 +232,34 @@ pub fn compute_work_group_count(
     return (x, y);
 }
 
+#[cfg(feature = "savegif")]
+pub fn copy_texture_to_buffer(
+    command_encoder: &mut wgpu::CommandEncoder,
+    texture: &wgpu::Texture,
+    texture_size: Extent3d,
+    buffer: &wgpu::Buffer,
+) {
+    let padded_bytes_per_row = padded_bytes_per_row(texture_size.width);
+    command_encoder.copy_texture_to_buffer(
+        wgpu::ImageCopyTexture {
+            aspect: wgpu::TextureAspect::All,
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+        },
+        wgpu::ImageCopyBuffer {
+            buffer: &buffer,
+            layout: wgpu::ImageDataLayout {
+                offset: 0,
+                bytes_per_row: std::num::NonZeroU32::new(padded_bytes_per_row as u32),
+                rows_per_image: std::num::NonZeroU32::new(texture_size.height),
+            },
+        },
+        texture_size,
+    );
+}
+
+#[cfg(feature = "savegif")]
 pub fn save_gif(
     path: &str,
     frames: &mut Vec<Vec<u8>>,
@@ -251,6 +279,7 @@ pub fn save_gif(
     Ok(())
 }
 
+#[cfg(feature = "savegif")]
 pub fn padded_bytes_per_row(width: u32) -> usize {
     let bytes_per_row = width as usize * 4;
     let padding = (256 - bytes_per_row % 256) % 256;

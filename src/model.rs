@@ -1,17 +1,28 @@
-use image::{self, GenericImageView};
-use wgpu::{Device, Extent3d, Queue, Surface};
+use image;
+use wgpu::{Device, Queue, Surface};
 use winit::{event::*, window::Window};
 
 use crate::resources::{ImgShaders, Resources};
+
+#[cfg(feature = "savegif")]
+use crate::util::{copy_texture_to_buffer, create_texture, padded_bytes_per_row, save_gif};
+#[cfg(feature = "savegif")]
+use image::GenericImageView;
+#[cfg(feature = "savegif")]
+use pollster::FutureExt;
+#[cfg(feature = "savegif")]
+use wgpu::{Extent3d, TextureFormat, TextureUsages};
 
 pub struct Model {
     surface: Surface,
     device: Device,
     queue: Queue,
     resources: Resources,
-    texture_size: Extent3d,
-    frames: Vec<Vec<u8>>,
     frame_num: usize,
+    #[cfg(feature = "savegif")]
+    texture_size: Extent3d,
+    #[cfg(feature = "savegif")]
+    frames: Vec<Vec<u8>>,
 }
 
 impl Model {
@@ -67,19 +78,22 @@ impl Model {
             &draw_shader,
         );
 
+        #[cfg(feature = "savegif")]
         let (width, height) = img.dimensions();
         Model {
             surface,
             device,
             queue,
             resources,
+            frame_num: 0,
+            #[cfg(feature = "savegif")]
             texture_size: wgpu::Extent3d {
                 width,
                 height,
                 depth_or_array_layers: 1,
             },
+            #[cfg(feature = "savegif")]
             frames: Vec::new(),
-            frame_num: 0,
         }
     }
 
@@ -89,92 +103,69 @@ impl Model {
 
     pub fn update(&mut self) {}
 
-    //fn render_frame(&mut self) -> anyhow::Result<()> {
-    //    let mut command_encoder = self
-    //        .device
-    //        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-    //    let target_texture = create_texture(
-    //        &self.device,
-    //        self.texture_size,
-    //        TextureFormat::Bgra8UnormSrgb,
-    //        TextureUsages::COPY_SRC | TextureUsages::RENDER_ATTACHMENT,
-    //    );
-    //    let color_attachments = [wgpu::RenderPassColorAttachment {
-    //        view: &target_texture.create_view(&wgpu::TextureViewDescriptor::default()),
-    //        resolve_target: None,
-    //        ops: wgpu::Operations {
-    //            load: wgpu::LoadOp::Clear(wgpu::Color {
-    //                r: 1.0,
-    //                g: 1.0,
-    //                b: 1.0,
-    //                a: 1.0,
-    //            }),
-    //            store: true,
-    //        },
-    //    }];
-    //    let render_pass_descriptor = wgpu::RenderPassDescriptor {
-    //        label: None,
-    //        color_attachments: &color_attachments,
-    //        depth_stencil_attachment: None,
-    //    };
-    //    {
-    //        let mut render_pass = command_encoder.begin_render_pass(&render_pass_descriptor);
-    //        render_pass.set_pipeline(&self.resources.render_pipeline);
-    //        render_pass.set_vertex_buffer(
-    //            0,
-    //            self.resources.particle_buffers[(self.frame_num + 1) % 2].slice(..),
-    //        );
-    //        render_pass.set_vertex_buffer(1, self.resources.vertices_buffer.slice(..));
-    //        render_pass.draw(0..24, 0..NUM_PARTICLES);
-    //    }
+    #[cfg(feature = "savegif")]
+    fn save_frame(&mut self) -> anyhow::Result<()> {
+        let mut command_encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        let target_texture = create_texture(
+            &self.device,
+            self.texture_size,
+            TextureFormat::Bgra8UnormSrgb,
+            TextureUsages::COPY_SRC | TextureUsages::RENDER_ATTACHMENT,
+        );
+        let color_attachments = [wgpu::RenderPassColorAttachment {
+            view: &target_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: wgpu::LoadOp::Clear(wgpu::Color {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                }),
+                store: true,
+            },
+        }];
+        self.resources
+            .render_pass(&mut command_encoder, &color_attachments, self.frame_num);
 
-    //    let padded_bytes_per_row = padded_bytes_per_row(self.texture_size.width);
-    //    let unpadded_bytes_per_row = self.texture_size.width as usize * 4;
-    //    let output_buffer_size = padded_bytes_per_row as u64
-    //        * self.texture_size.height as u64
-    //        * std::mem::size_of::<u8>() as u64;
-    //    let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-    //        label: None,
-    //        size: output_buffer_size,
-    //        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-    //        mapped_at_creation: false,
-    //    });
-    //    command_encoder.copy_texture_to_buffer(
-    //        wgpu::ImageCopyTexture {
-    //            aspect: wgpu::TextureAspect::All,
-    //            texture: &target_texture,
-    //            mip_level: 0,
-    //            origin: wgpu::Origin3d::ZERO,
-    //        },
-    //        wgpu::ImageCopyBuffer {
-    //            buffer: &output_buffer,
-    //            layout: wgpu::ImageDataLayout {
-    //                offset: 0,
-    //                bytes_per_row: std::num::NonZeroU32::new(padded_bytes_per_row as u32),
-    //                rows_per_image: std::num::NonZeroU32::new(self.texture_size.height),
-    //            },
-    //        },
-    //        self.texture_size,
-    //    );
-    //    self.queue.submit(Some(command_encoder.finish()));
+        let padded_bytes_per_row = padded_bytes_per_row(self.texture_size.width);
+        let output_buffer_size = padded_bytes_per_row as u64
+            * self.texture_size.height as u64
+            * std::mem::size_of::<u8>() as u64;
+        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: output_buffer_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        copy_texture_to_buffer(
+            &mut command_encoder,
+            &target_texture,
+            self.texture_size,
+            &output_buffer,
+        );
+        self.queue.submit(Some(command_encoder.finish()));
 
-    //    let buffer_slice = output_buffer.slice(..);
-    //    let mapping = buffer_slice.map_async(wgpu::MapMode::Read);
-    //    self.device.poll(wgpu::Maintain::Wait);
-    //    mapping.block_on().unwrap();
-    //    let padded_data = buffer_slice.get_mapped_range();
+        let buffer_slice = output_buffer.slice(..);
+        let mapping = buffer_slice.map_async(wgpu::MapMode::Read);
+        self.device.poll(wgpu::Maintain::Wait);
+        mapping.block_on().unwrap();
+        let padded_data = buffer_slice.get_mapped_range();
 
-    //    let data = padded_data
-    //        .chunks(padded_bytes_per_row as _)
-    //        .map(|chunk| &chunk[..unpadded_bytes_per_row as _])
-    //        .flatten()
-    //        .map(|x| *x)
-    //        .collect::<Vec<_>>();
-    //    drop(padded_data);
-    //    output_buffer.unmap();
-    //    self.frames.push(data);
-    //    Ok(())
-    //}
+        let unpadded_bytes_per_row = self.texture_size.width as usize * 4;
+        let data = padded_data
+            .chunks(padded_bytes_per_row as _)
+            .map(|chunk| &chunk[..unpadded_bytes_per_row as _])
+            .flatten()
+            .map(|x| *x)
+            .collect::<Vec<_>>();
+        drop(padded_data);
+        output_buffer.unmap();
+        self.frames.push(data);
+        Ok(())
+    }
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let mut command_encoder = self
@@ -205,23 +196,25 @@ impl Model {
         self.queue.submit(Some(command_encoder.finish()));
         frame.present();
 
-        //if self.frame_num % 6 == 0 {
-        //    self.render_frame().unwrap();
-        //}
+        #[cfg(feature = "savegif")]
+        {
+            if self.frame_num <= 100 {
+                self.save_frame().unwrap();
+            }
+            if self.frame_num == 100 {
+                println!("saving...");
+                save_gif(
+                    "output.gif",
+                    &mut self.frames,
+                    1,
+                    self.texture_size.width as u16,
+                )
+                .unwrap();
+                println!("saved!!!");
+            }
+        }
+
         self.frame_num += 1;
-
-        //if self.frame_num == 270 {
-        //    println!("saving...");
-        //    save_gif(
-        //        "output.gif",
-        //        &mut self.frames,
-        //        1,
-        //        self.texture_size.width as u16,
-        //    )
-        //    .unwrap();
-        //    println!("saved!!!");
-        //}
-
         Ok(())
     }
 }
