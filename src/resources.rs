@@ -109,7 +109,7 @@ impl ImgShaders {
                 encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
             compute_pass.set_pipeline(&pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.dispatch(dispatch_width, dispatch_height, 1);
+            compute_pass.dispatch_workgroups(dispatch_width, dispatch_height, 1);
         }
         queue.submit(Some(encoder.finish()));
 
@@ -155,7 +155,7 @@ impl ImgShaders {
                 encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: None });
             compute_pass.set_pipeline(&pipeline);
             compute_pass.set_bind_group(0, &bind_group, &[]);
-            compute_pass.dispatch(dispatch_width, dispatch_height, 1);
+            compute_pass.dispatch_workgroups(dispatch_width, dispatch_height, 1);
         }
         queue.submit(Some(encoder.finish()));
         return output_texture;
@@ -372,13 +372,13 @@ impl Resources {
         compute_pass.set_bind_group(0, &parameter_bind_group, &[]);
         compute_pass.set_bind_group(1, &self.particle_bind_groups[frame_num % 2], &[]);
         compute_pass.set_bind_group(2, &self.texture_bind_group, &[]);
-        compute_pass.dispatch(self.work_group_count, 1, 1);
+        compute_pass.dispatch_workgroups(self.work_group_count, 1, 1);
     }
 
     pub fn render_pass(
         &self,
         command_encoder: &mut wgpu::CommandEncoder,
-        color_attachments: &[wgpu::RenderPassColorAttachment],
+        color_attachments: &[Option<wgpu::RenderPassColorAttachment>],
         frame_num: usize,
     ) {
         let render_pass_descriptor = wgpu::RenderPassDescriptor {

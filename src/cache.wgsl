@@ -25,7 +25,7 @@ fn coord_to_pos(x: i32, y: i32, width: i32, height: i32) -> vec2<f32> {
     return pos;
 }
 
-@stage(compute)
+@compute
 @workgroup_size(16, 16)
 fn main(
     @builtin(global_invocation_id) global_invocation_id: vec3<u32>
