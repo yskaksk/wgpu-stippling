@@ -51,22 +51,22 @@ impl Model {
             .unwrap();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface.get_preferred_format(&adapter).unwrap(),
+            format: surface.get_supported_formats(&adapter)[0],
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::Fifo,
         };
         surface.configure(&device, &config);
 
-        let gray_scale_shader = device.create_shader_module(&wgpu::include_wgsl!("grayscale.wgsl"));
-        let cache_shader = device.create_shader_module(&wgpu::include_wgsl!("cache.wgsl"));
+        let gray_scale_shader = device.create_shader_module(wgpu::include_wgsl!("grayscale.wgsl"));
+        let cache_shader = device.create_shader_module(wgpu::include_wgsl!("cache.wgsl"));
         let img_shaders = ImgShaders::new(gray_scale_shader, cache_shader);
 
         let img = image::load_from_memory(include_bytes!("../assets/cat_3_square.png")).unwrap();
         let img2 = image::load_from_memory(include_bytes!("../assets/cat_face.png")).unwrap();
 
-        let compute_shader = device.create_shader_module(&wgpu::include_wgsl!("compute.wgsl"));
-        let draw_shader = device.create_shader_module(&wgpu::include_wgsl!("draw.wgsl"));
+        let compute_shader = device.create_shader_module(wgpu::include_wgsl!("compute.wgsl"));
+        let draw_shader = device.create_shader_module(wgpu::include_wgsl!("draw.wgsl"));
         let resources = Resources::new(
             &device,
             &queue,
@@ -178,7 +178,7 @@ impl Model {
         let view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let color_attachments = [wgpu::RenderPassColorAttachment {
+        let color_attachments = [Some(wgpu::RenderPassColorAttachment {
             view: &view,
             resolve_target: None,
             ops: wgpu::Operations {
@@ -190,7 +190,7 @@ impl Model {
                 }),
                 store: true,
             },
-        }];
+        })];
         self.resources
             .render_pass(&mut command_encoder, &color_attachments, self.frame_num);
         self.queue.submit(Some(command_encoder.finish()));

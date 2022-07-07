@@ -45,7 +45,7 @@ fn get_texel(texture: texture_2d<f32>, x: f32, y: f32) -> vec4<f32> {
     return textureLoad(texture, vec2<i32>(ix, iy), 0);
 }
 
-@stage(compute)
+@compute
 @workgroup_size(64)
 fn main(@builtin(global_invocation_id) global_invocation_id: vec3<u32>) {
   let total = arrayLength(&particlesSrc);

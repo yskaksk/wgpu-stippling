@@ -44,7 +44,7 @@ pub fn create_render_pipeline(
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: "main_fs",
-            targets: &[config.format.into()],
+            targets: &[Some(config.format.into())],
         }),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
